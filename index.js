@@ -23,6 +23,19 @@ const client = new MongoClient(uri, {
     }
 });
 
+app.post("/jwt", async (req, res) => {
+    const user = req.body; // { email }
+    if (!user?.email) {
+        return res.status(400).send({ message: "Email is required" });
+    }
+
+    const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+        expiresIn: "7d",
+    });
+
+    res.send({ token });
+});
+
 async function run() {
     try {
 
