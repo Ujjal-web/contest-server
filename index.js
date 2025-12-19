@@ -61,24 +61,84 @@ async function run() {
             });
         };
 
+        const verifyAdmin = async (req, res, next) => {
+            const email = req.decoded.email;
+            const user = await userCollection.findOne({ email });
+            if (user?.role !== "admin") {
+                return res
+                    .status(403)
+                    .send({ message: "Forbidden: admin access only" });
+            }
+            next();
+        };
+
         // ----- USER ROUTES -----
+
+        // Get all users (admin only)
+        app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
+            try {
+                const users = await userCollection.find().toArray();
+                res.send(users);
+            } catch (error) {
+                console.error("Error fetching users:", error);
+                res.status(500).send({ message: "Failed to fetch users" });
+            }
+        });
+
+        // Change user role (admin only)
+        app.patch("/users/:id/role", verifyToken, verifyAdmin, async (req, res) => {
+            try {
+                const id = req.params.id;
+                const { role } = req.body;
+
+                const validRoles = ["user", "creator", "admin"];
+                if (!validRoles.includes(role)) {
+                    return res.status(400).send({ message: "Invalid role" });
+                }
+
+                const filter = { _id: new ObjectId(id) };
+                const updateDoc = {
+                    $set: { role },
+                };
+
+                const result = await userCollection.updateOne(filter, updateDoc);
+                res.send(result);
+            } catch (error) {
+                console.error("Error updating role:", error);
+                res.status(500).send({ message: "Failed to update user role" });
+            }
+        });
 
         // Create user (called from frontend register/Google signup)
         app.post("/users", async (req, res) => {
-            const user = req.body; // { name, email, photoURL, role, rolePreference }
+            const user = req.body; // { name, email, photoURL, role, rolePreference? }
 
             if (!user?.email) {
                 return res.status(400).send({ message: "Email is required" });
             }
 
-            const existing = await userCollection.findOne({ email: user.email });
-            if (existing) {
+            try {
+                // Check if user already exists
+                const existing = await userCollection.findOne({ email: user.email });
+                if (existing) {
+                    // Do NOT override existing role; just return
+                    return res.send({
+                        message: "User already exists",
+                        insertedId: null,
+                    });
+                }
 
-                return res.send({ message: "User already exists", insertedId: null });
+                // Set default role if not provided
+                if (!user.role) {
+                    user.role = "user";
+                }
+
+                const result = await userCollection.insertOne(user);
+                res.send(result);
+            } catch (error) {
+                console.error("Error inserting user:", error);
+                res.status(500).send({ message: "Failed to save user" });
             }
-
-            const result = await userCollection.insertOne(user);
-            res.send(result);
         });
 
         // Get role of a user by email
