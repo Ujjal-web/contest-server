@@ -197,6 +197,51 @@ async function run() {
             }
         });
 
+        // Creator: get all contests created by the logged-in user
+        app.get("/creator/contests", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+                const contests = await contestCollection
+                    .find({ creatorEmail: email }) // make sure you set this when creating contests
+                    .sort({ createdAt: -1 })
+                    .toArray();
+
+                res.send(contests);
+            } catch (error) {
+                console.error("Error fetching creator contests:", error);
+                res.status(500).send({ message: "Failed to fetch contests" });
+            }
+        });
+
+        // Creator: delete own contest ONLY if still pending
+        app.delete("/creator/contests/:id", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+                const id = req.params.id;
+
+                const filter = {
+                    _id: new ObjectId(id),
+                    creatorEmail: email,
+                    status: "pending", // only pending contests can be deleted
+                };
+
+                const result = await contestCollection.deleteOne(filter);
+
+                if (result.deletedCount === 0) {
+                    return res
+                        .status(400)
+                        .send({
+                            message:
+                                "Only your own pending contests can be deleted or this contest no longer exists.",
+                        });
+                }
+
+                res.send(result);
+            } catch (error) {
+                console.error("Error deleting creator contest:", error);
+                res.status(500).send({ message: "Failed to delete contest" });
+            }
+        });
         // Creator / authenticated: create contest (status = pending)
         app.post("/contests", verifyToken, async (req, res) => {
             try {
