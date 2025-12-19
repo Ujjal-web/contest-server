@@ -71,6 +71,7 @@ async function run() {
         const db = client.db("contestHubDB");
         const userCollection = db.collection("users");
         const contestCollection = db.collection("contests");
+        const submissionCollection = db.collection("submissions");
         const paymentCollection = db.collection("payments");
 
         // ---------- Verify Admin Middleware ----------
@@ -314,6 +315,143 @@ async function run() {
             }
         );
 
+        // Get submissions for a specific contest (creator only)
+        app.get(
+            "/creator/contests/:id/submissions",
+            verifyToken,
+            async (req, res) => {
+                try {
+                    const email = req.decoded.email;
+                    const contestId = req.params.id;
+
+                    // Ensure this contest belongs to the creator
+                    const contest = await contestCollection.findOne({
+                        _id: new ObjectId(contestId),
+                    });
+
+                    if (!contest) {
+                        return res.status(404).send({ message: "Contest not found" });
+                    }
+
+                    if (contest.creatorEmail !== email) {
+                        return res
+                            .status(403)
+                            .send({ message: "Forbidden: not your contest" });
+                    }
+
+                    const submissions = await submissionCollection
+                        .find({ contestId: contestId })
+                        .sort({ submittedAt: -1 })
+                        .toArray();
+
+                    res.send(submissions);
+                } catch (error) {
+                    console.error("Error fetching submissions:", error);
+                    res
+                        .status(500)
+                        .send({ message: "Failed to fetch submissions" });
+                }
+            }
+        );
+
+        // Declare winner for a submission (only one winner per contest, creator only)
+        app.patch(
+            "/creator/submissions/:id/winner",
+            verifyToken,
+            async (req, res) => {
+                try {
+                    const email = req.decoded.email;
+                    const submissionId = req.params.id;
+                    const { contestId } = req.body;
+
+                    // 1. Find contest and verify ownership
+                    const contest = await contestCollection.findOne({
+                        _id: new ObjectId(contestId),
+                    });
+
+                    if (!contest) {
+                        return res.status(404).send({ message: "Contest not found" });
+                    }
+
+                    if (contest.creatorEmail !== email) {
+                        return res
+                            .status(403)
+                            .send({ message: "Forbidden: not your contest" });
+                    }
+
+                    // 2. Ensure no winner yet
+                    if (contest.winnerSubmissionId) {
+                        return res
+                            .status(400)
+                            .send({ message: "Winner already declared for this contest" });
+                    }
+
+                    // 3. Fetch submission
+                    const submission = await submissionCollection.findOne({
+                        _id: new ObjectId(submissionId),
+                        contestId: contestId,
+                    });
+
+                    if (!submission) {
+                        return res
+                            .status(404)
+                            .send({ message: "Submission not found" });
+                    }
+
+                    // 4. Mark submission as winner
+                    const updateSubmission = await submissionCollection.updateOne(
+                        { _id: new ObjectId(submissionId) },
+                        { $set: { isWinner: true } }
+                    );
+
+                    // 5. Update contest winner info
+                    const updateContest = await contestCollection.updateOne(
+                        { _id: new ObjectId(contestId) },
+                        {
+                            $set: {
+                                winnerSubmissionId: submission._id,
+                                winnerUserEmail: submission.userEmail,
+                                winnerUserName: submission.userName,
+                            },
+                        }
+                    );
+
+                    res.send({
+                        modifiedCount:
+                            updateSubmission.modifiedCount + updateContest.modifiedCount,
+                    });
+                } catch (error) {
+                    console.error("Error declaring winner:", error);
+                    res
+                        .status(500)
+                        .send({ message: "Failed to declare winner" });
+                }
+            }
+        );
+
+        app.post("/contests/:id/submissions", verifyToken, async (req, res) => {
+            try {
+                const contestId = req.params.id;
+                const email = req.decoded.email;
+                const { content, userName } = req.body; // userName optional
+
+                const submission = {
+                    contestId,
+                    userEmail: email,
+                    userName: userName || email,
+                    content,
+                    submittedAt: new Date(),
+                    isWinner: false,
+                };
+
+                const result = await submissionCollection.insertOne(submission);
+                res.send(result);
+            } catch (error) {
+                console.error("Error submitting task:", error);
+                res.status(500).send({ message: "Failed to submit task" });
+            }
+        });
+
         // ---------- ADMIN CONTEST ROUTES ----------
 
         // Get contests with pagination (admin only)
@@ -396,6 +534,100 @@ async function run() {
             }
         );
 
+        // Get current user's profile
+        app.get("/users/me", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+                const user = await userCollection.findOne(
+                    { email },
+                    { projection: { password: 0 } }
+                );
+                res.send(user || {});
+            } catch (error) {
+                console.error("Error fetching profile:", error);
+                res.status(500).send({ message: "Failed to fetch profile" });
+            }
+        });
+
+        // Update current user's profile (name, photoURL, bio)
+        app.patch("/users/profile", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+                const { name, photoURL, bio } = req.body;
+
+                const updateDoc = {
+                    $set: {
+                        ...(name && { name }),
+                        ...(photoURL && { photoURL }),
+                        ...(bio !== undefined && { bio }),
+                    },
+                };
+
+                const result = await userCollection.updateOne({ email }, updateDoc);
+                res.send(result);
+            } catch (error) {
+                console.error("Error updating profile:", error);
+                res.status(500).send({ message: "Failed to update profile" });
+            }
+        });
+
+        // Get stats for current user: participated contests & wins
+        app.get("/users/stats", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+
+                // participated
+                const participated = await paymentCollection.countDocuments({
+                    userEmail: email,
+                });
+
+                // number of winning submissions
+                const wins = await submissionCollection.countDocuments({
+                    userEmail: email,
+                    isWinner: true,
+                });
+
+                res.send({ participated, wins });
+            } catch (error) {
+                console.error("Error fetching user stats:", error);
+                res.status(500).send({ message: "Failed to fetch user stats" });
+            }
+        });
+        // Get all contests the current user has paid for
+        app.get("/payments/my", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+
+                // Adjust field names to match your payment schema
+                // Assumes:
+                // - payments have { userEmail, contestId: ObjectId, amount, paymentStatus, paidAt }
+                // - contests collection has _id, name, type, deadline, price, prizeMoney, image
+                const payments = await paymentCollection
+                    .aggregate([
+                        {
+                            $match: {
+                                userEmail: email,
+                                paymentStatus: "paid", // change if you use another status field
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "contests",
+                                localField: "contestId",
+                                foreignField: "_id",
+                                as: "contest",
+                            },
+                        },
+                        { $unwind: "$contest" },
+                    ])
+                    .toArray();
+
+                res.send(payments);
+            } catch (error) {
+                console.error("Error fetching user payments:", error);
+                res.status(500).send({ message: "Failed to fetch participated contests" });
+            }
+        });
         // --------- MongoDB Ping ----------
         await client.db("admin").command({ ping: 1 });
         console.log("Successfully connected to MongoDB!");
