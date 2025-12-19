@@ -259,6 +259,61 @@ async function run() {
             }
         });
 
+        app.get("/contests/:id", async (req, res) => {
+            try {
+                const id = req.params.id;
+                const contest = await contestCollection.findOne({
+                    _id: new ObjectId(id),
+                });
+
+                if (!contest) {
+                    return res.status(404).send({ message: "Contest not found" });
+                }
+
+                res.send(contest);
+            } catch (error) {
+                console.error("Error fetching contest:", error);
+                res.status(500).send({ message: "Failed to fetch contest" });
+            }
+        });
+
+        app.patch(
+            "/creator/contests/:id",
+            verifyToken,
+            async (req, res) => {
+                try {
+                    const email = req.decoded.email;
+                    const id = req.params.id;
+                    const update = req.body;
+
+                    const filter = {
+                        _id: new ObjectId(id),
+                        creatorEmail: email,
+                        status: "pending", // only pending contests can be edited
+                    };
+
+                    const updateDoc = {
+                        $set: {
+                            name: update.name,
+                            image: update.image,
+                            description: update.description,
+                            price: update.price,
+                            prizeMoney: update.prizeMoney,
+                            taskInstruction: update.taskInstruction,
+                            type: update.type,
+                            deadline: update.deadline,
+                        },
+                    };
+
+                    const result = await contestCollection.updateOne(filter, updateDoc);
+                    res.send(result);
+                } catch (error) {
+                    console.error("Error updating creator contest:", error);
+                    res.status(500).send({ message: "Failed to update contest" });
+                }
+            }
+        );
+
         // ---------- ADMIN CONTEST ROUTES ----------
 
         // Get contests with pagination (admin only)
