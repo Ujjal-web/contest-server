@@ -593,6 +593,24 @@ async function run() {
                 res.status(500).send({ message: "Failed to fetch user stats" });
             }
         });
+
+        // Get all contests where the current user is the declared winner
+        app.get("/users/wins", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+
+                // in the /creator/submissions/:id/winner route
+                const wins = await contestCollection
+                    .find({ winnerUserEmail: email })
+                    .sort({ deadline: -1 }) // most recent deadlines first
+                    .toArray();
+
+                res.send(wins);
+            } catch (error) {
+                console.error("Error fetching winning contests:", error);
+                res.status(500).send({ message: "Failed to fetch winning contests" });
+            }
+        });
         // Get all contests the current user has paid for
         app.get("/payments/my", verifyToken, async (req, res) => {
             try {
