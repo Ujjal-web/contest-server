@@ -429,11 +429,31 @@ async function run() {
             }
         );
 
+        // Submit task for a contest (only for logged-in users; you may also check registration)
         app.post("/contests/:id/submissions", verifyToken, async (req, res) => {
             try {
-                const contestId = req.params.id;
                 const email = req.decoded.email;
-                const { content, userName } = req.body; // userName optional
+                const contestId = req.params.id;
+                const { content, userName } = req.body;
+
+                if (!content || !content.trim()) {
+                    return res
+                        .status(400)
+                        .send({ message: "Submission content is required" });
+                }
+
+                // ensure user is registered for this contest
+                const payment = await paymentCollection.findOne({
+                    userEmail: email,
+                    contestId: new ObjectId(contestId),
+                    paymentStatus: "paid",
+                });
+
+                if (!payment) {
+                    return res
+                        .status(403)
+                        .send({ message: "You must register for this contest before submitting" });
+                }
 
                 const submission = {
                     contestId,
@@ -646,6 +666,27 @@ async function run() {
                 res.status(500).send({ message: "Failed to fetch participated contests" });
             }
         });
+
+        // Check if current user has paid (registered) for a specific contest
+        app.get("/payments/registered/:contestId", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+                const contestId = req.params.contestId;
+
+                const payment = await paymentCollection.findOne({
+                    userEmail: email,                 // adjust if your field name is different
+                    contestId: new ObjectId(contestId),
+                    paymentStatus: "paid",            // adjust if you use different status
+                });
+
+                res.send({ registered: !!payment });
+            } catch (error) {
+                console.error("Error checking registration:", error);
+                res.status(500).send({ message: "Failed to check registration" });
+            }
+        });
+
+
         // --------- MongoDB Ping ----------
         await client.db("admin").command({ ping: 1 });
         console.log("Successfully connected to MongoDB!");
