@@ -60,6 +60,80 @@ async function run() {
                 next();
             });
         };
+
+        // ----- USER ROUTES -----
+
+        // Create user (called from frontend register/Google signup)
+        app.post("/users", async (req, res) => {
+            const user = req.body; // { name, email, photoURL, role, rolePreference }
+
+            if (!user?.email) {
+                return res.status(400).send({ message: "Email is required" });
+            }
+
+            const existing = await userCollection.findOne({ email: user.email });
+            if (existing) {
+
+                return res.send({ message: "User already exists", insertedId: null });
+            }
+
+            const result = await userCollection.insertOne(user);
+            res.send(result);
+        });
+
+        // Get role of a user by email
+        app.get("/users/role/:email", async (req, res) => {
+            const email = req.params.email;
+            const user = await userCollection.findOne({ email });
+
+            // Default role is 'user' if not found
+            const role = user?.role || "user";
+            res.send({ role });
+        });
+
+        // ----- CONTEST ROUTES -----
+
+        app.get("/contests", async (req, res) => {
+            const search = req.query.search || "";
+            const type = req.query.type;
+
+            let query = {
+                name: { $regex: search, $options: "i" },
+                status: "approved",
+            };
+
+            if (type) {
+                query.type = type;
+            }
+
+            const result = await contestCollection.find(query).toArray();
+            res.send(result);
+        });
+
+        app.get("/contests/popular", async (req, res) => {
+            const result = await contestCollection
+                .find({ status: "approved" })
+                .sort({ participationCount: -1 })
+                .limit(6)
+                .toArray();
+            res.send(result);
+        });
+
+        // Protected: only logged-in users can create contests
+        app.post("/contests", verifyToken, async (req, res) => {
+            const contest = req.body;
+
+            contest.participationCount = 0;
+            contest.status = "pending";
+            contest.createdAt = new Date();
+
+            const result = await contestCollection.insertOne(contest);
+            res.send(result);
+        });
+
+
+
+
         //..... API ROUTES ---
         app.get('/contests', async (req, res) => {
             const search = req.query.search || "";
