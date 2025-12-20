@@ -3,7 +3,8 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
-// const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -631,12 +632,93 @@ async function run() {
                 res.status(500).send({ message: "Failed to fetch winning contests" });
             }
         });
+
+        //PaymentIntent for a contest (logged-in user)
+        app.post("/payments/create-intent", verifyToken, async (req, res) => {
+            try {
+                const { contestId } = req.body;
+
+                if (!contestId) {
+                    return res.status(400).send({ message: "contestId is required" });
+                }
+
+                const contest = await contestCollection.findOne({
+                    _id: new ObjectId(contestId),
+                });
+
+                if (!contest) {
+                    return res.status(404).send({ message: "Contest not found" });
+                }
+
+                if (typeof contest.price !== "number" || contest.price <= 0) {
+                    return res
+                        .status(400)
+                        .send({ message: "Invalid contest price for payment" });
+                }
+
+                const amount = Math.round(contest.price * 100);
+
+                const paymentIntent = await stripe.paymentIntents.create({
+                    amount,
+                    currency: "usd",
+                    payment_method_types: ["card"],
+                });
+
+                res.send({
+                    clientSecret: paymentIntent.client_secret,
+                });
+            } catch (error) {
+                console.error("Error creating payment intent:", error);
+                res.status(500).send({ message: "Failed to create payment intent" });
+            }
+        });
+
+        // Save payment info and update participants (after successful Stripe payment)
+        app.post("/payments", verifyToken, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+                const payment = req.body;
+                const { contestId, amount, transactionId } = payment;
+
+                if (!contestId || !amount || !transactionId) {
+                    return res
+                        .status(400)
+                        .send({ message: "contestId, amount and transactionId are required" });
+                }
+
+                const contestObjectId = new ObjectId(contestId);
+
+                const paymentDoc = {
+                    userEmail: email,
+                    contestId: contestObjectId,
+                    amount,
+                    transactionId,
+                    paymentStatus: "paid",
+                    paidAt: new Date(),
+                };
+
+                const paymentResult = await paymentCollection.insertOne(paymentDoc);
+
+                // Increase participants count on contest
+                const updateContest = await contestCollection.updateOne(
+                    { _id: contestObjectId },
+                    { $inc: { participationCount: 1 } }
+                );
+
+                res.send({
+                    paymentResult,
+                    updateContest,
+                });
+            } catch (error) {
+                console.error("Error saving payment:", error);
+                res.status(500).send({ message: "Failed to save payment" });
+            }
+        });
         // Get all contests the current user has paid for
         app.get("/payments/my", verifyToken, async (req, res) => {
             try {
                 const email = req.decoded.email;
 
-                // Adjust field names to match your payment schema
                 // Assumes:
                 // - payments have { userEmail, contestId: ObjectId, amount, paymentStatus, paidAt }
                 // - contests collection has _id, name, type, deadline, price, prizeMoney, image
@@ -674,9 +756,9 @@ async function run() {
                 const contestId = req.params.contestId;
 
                 const payment = await paymentCollection.findOne({
-                    userEmail: email,                 // adjust if your field name is different
+                    userEmail: email,
                     contestId: new ObjectId(contestId),
-                    paymentStatus: "paid",            // adjust if you use different status
+                    paymentStatus: "paid",
                 });
 
                 res.send({ registered: !!payment });
