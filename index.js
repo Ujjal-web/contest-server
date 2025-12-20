@@ -661,7 +661,9 @@ async function run() {
                 const paymentIntent = await stripe.paymentIntents.create({
                     amount,
                     currency: "usd",
-                    payment_method_types: ["card"],
+                    automatic_payment_methods: {
+                        enabled: true,
+                    },
                 });
 
                 res.send({
@@ -719,9 +721,7 @@ async function run() {
             try {
                 const email = req.decoded.email;
 
-                // Assumes:
-                // - payments have { userEmail, contestId: ObjectId, amount, paymentStatus, paidAt }
-                // - contests collection has _id, name, type, deadline, price, prizeMoney, image
+
                 const payments = await paymentCollection
                     .aggregate([
                         {
