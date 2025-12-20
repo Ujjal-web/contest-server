@@ -161,23 +161,39 @@ async function run() {
 
         // ---------- CONTEST ROUTES ----------
 
-        // Public: Get contests (search + type filter, only approved)
+        // Public: Get contests 
         app.get("/contests", async (req, res) => {
-            const search = req.query.search || "";
-            const type = req.query.type;
-
-            const query = {
-                name: { $regex: search, $options: "i" },
-                status: "approved",
-            };
-
-            if (type) {
-                query.type = type;
-            }
-
             try {
-                const result = await contestCollection.find(query).toArray();
-                res.send(result);
+                const search = req.query.search || "";
+                const type = req.query.type;
+                const page = parseInt(req.query.page) || 1;
+                const limit = parseInt(req.query.limit) || 9; // items per page
+                const skip = (page - 1) * limit;
+
+                const query = {
+                    name: { $regex: search, $options: "i" },
+                    status: "approved",
+                };
+
+                if (type) {
+                    query.type = type;
+                }
+
+                const total = await contestCollection.countDocuments(query);
+
+                const contests = await contestCollection
+                    .find(query)
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .toArray();
+
+                res.send({
+                    contests,
+                    total,
+                    page,
+                    totalPages: Math.ceil(total / limit),
+                });
             } catch (error) {
                 console.error("Error fetching contests:", error);
                 res.status(500).send({ message: "Failed to fetch contests" });
@@ -196,6 +212,64 @@ async function run() {
             } catch (error) {
                 console.error("Error fetching popular contests:", error);
                 res.status(500).send({ message: "Failed to fetch popular contests" });
+            }
+        });
+
+        // Leaderboard: users ranked by number of wins
+        app.get("/leaderboard", async (req, res) => {
+            try {
+                // Group contests by winner email
+                const pipeline = [
+                    {
+                        $match: {
+                            winnerUserEmail: { $exists: true, $ne: null },
+                        },
+                    },
+                    {
+                        $group: {
+                            _id: "$winnerUserEmail",
+                            wins: { $sum: 1 },
+                            totalPrize: { $sum: { $ifNull: ["$prizeMoney", 0] } },
+                        },
+                    },
+                    {
+                        $sort: { wins: -1, totalPrize: -1 },
+                    },
+                    {
+                        $limit: 5,
+                    },
+                    {
+                        $lookup: {
+                            from: "users",
+                            localField: "_id",
+                            foreignField: "email",
+                            as: "user",
+                        },
+                    },
+                    {
+                        $unwind: {
+                            path: "$user",
+                            preserveNullAndEmptyArrays: true,
+                        },
+                    },
+                    {
+                        $project: {
+                            _id: 0,
+                            email: "$_id",
+                            wins: 1,
+                            totalPrize: 1,
+                            name: { $ifNull: ["$user.name", "$_id"] },
+                            photoURL: "$user.photoURL",
+                            role: "$user.role",
+                        },
+                    },
+                ];
+
+                const leaderboard = await contestCollection.aggregate(pipeline).toArray();
+                res.send(leaderboard);
+            } catch (error) {
+                console.error("Error fetching leaderboard:", error);
+                res.status(500).send({ message: "Failed to load leaderboard" });
             }
         });
 
